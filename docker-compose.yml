@@ -1,0 +1,9 @@
+services:
+  gods-eye-view:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "4173:4173"
+    env_file:
+      - .env
+
