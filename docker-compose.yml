@@ -3,7 +3,8 @@ services:
     build: .
     restart: unless-stopped
     ports:
-      - "4173:4173"
+      - "${PORT}:${PORT}"
     env_file:
       - .env
+    command: command: ["npm", "run", "dev"]
 
