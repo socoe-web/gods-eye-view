@@ -7464,6 +7464,30 @@ function normalizeAisTimestamp(value) {
 }
 
 /**
+ * Build the `frame-ancestors` CSP directive for everything this dev server
+ * serves.
+ *
+ * Read from process.env at CALL TIME, not module load: Vite's loadEnv() copies
+ * the checkout's dotenv files into process.env inside the config factory, which
+ * runs AFTER this module is imported. A module-load read would always see the
+ * value unset. Request handlers and the server `headers` block both run after
+ * the factory, so both see the loaded value.
+ *
+ * `'self'` is always present so the app frames itself. Extra origins come from
+ * CSP_FRAME_ANCESTORS as a space- or comma-separated list; unset means
+ * same-origin only.
+ *
+ * @returns {string} e.g. `frame-ancestors 'self' https://example.com`
+ */
+function frameAncestorsPolicy() {
+  const extra = String(process.env.CSP_FRAME_ANCESTORS ?? '')
+    .split(/[\s,]+/)
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+  return ['frame-ancestors', "'self'", ...extra].join(' ');
+}
+
+/**
  * In-app key setup ("POWER UP" panel) — dev-server only.
  *
  * GET  /api/setup/status → which keys are configured, as presence plus a
@@ -7485,11 +7509,13 @@ function keySetupEndpoint() {
     res.statusCode = statusCode;
     res.setHeader('Content-Type', 'application/json');
     // A credential-status response must never be cached by a proxy or the disk
-    // cache, and the surface must never be framed (clickjacking a same-origin
-    // REMOVE/replace past the Origin check).
+    // cache. The framing policy is repeated here for defence in depth; the
+    // directive that actually stops clickjacking is the one on the app
+    // document (see server.headers), because a browser evaluates
+    // frame-ancestors against the framed page's navigation response, not
+    // against the JSON this endpoint returns.
     res.setHeader('Cache-Control', 'no-store');
-    // res.setHeader('X-Frame-Options', 'DENY');
-    res.setHeader('Content-Security-Policy', "frame-ancestors 'self' " + env.CSP_FRAME_ANCESTORS);
+    res.setHeader('Content-Security-Policy', frameAncestorsPolicy());
     res.end(JSON.stringify(payload));
   };
   // Which store this launch owns. A Pinokio-managed launch (marker set by
@@ -7777,11 +7803,15 @@ export default defineConfig(({ mode }) => {
       // navigation response. Without this, a hostile page could frame
       // `/?setup=1`, align a lure over Provider Settings, and have the framed
       // app issue a perfectly same-origin credential write that passes every
-      // Host/Origin check. These headers apply to everything this dev server
+      // Host/Origin check. This header applies to everything this dev server
       // serves, which is what makes that attack impossible rather than unlikely.
       headers: {
-        'X-Frame-Options': 'DENY',
-        'Content-Security-Policy': "frame-ancestors 'self' " + env.CSP_FRAME_ANCESTORS,
+        // No X-Frame-Options here: it only understands DENY/SAMEORIGIN, so it
+        // cannot express "allow this one partner origin" and a browser that
+        // honours it would veto whatever CSP_FRAME_ANCESTORS allows. CSP
+        // frame-ancestors below is the enforcing header, and it is supported by
+        // every browser this app targets.
+        'Content-Security-Policy': frameAncestorsPolicy(),
       },
     },
     // Expose selected API keys to the browser via import.meta.env.*
